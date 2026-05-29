@@ -14,6 +14,14 @@ export default function Queue() {
   const [status, setStatus] = useState<MapStatus>("pending");
   const [maps, setMaps] = useState<AdminMap[]>([]);
   const [loading, setLoading] = useState(true);
+  const [zoom, setZoom] = useState<string | null>(null);
+
+  // Close the lightbox on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setZoom(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -50,14 +58,29 @@ export default function Queue() {
       </div>
 
       {maps.map((m) => (
-        <MapEditor key={m.id} map={m} onStatus={setMapStatus} />
+        <MapEditor key={m.id} map={m} onStatus={setMapStatus} onZoom={setZoom} />
       ))}
       {!loading && maps.length === 0 && <p className="muted">Nothing here.</p>}
+
+      {zoom && (
+        <div className="lightbox" onClick={() => setZoom(null)}>
+          <img src={zoom} alt="full map" onClick={(e) => e.stopPropagation()} />
+          <span className="lightbox-hint">click anywhere or press Esc to close</span>
+        </div>
+      )}
     </>
   );
 }
 
-function MapEditor({ map, onStatus }: { map: AdminMap; onStatus: (id: string, s: MapStatus) => void }) {
+function MapEditor({
+  map,
+  onStatus,
+  onZoom,
+}: {
+  map: AdminMap;
+  onStatus: (id: string, s: MapStatus) => void;
+  onZoom: (url: string) => void;
+}) {
   const [description, setDescription] = useState(map.description ?? "");
   const [tags, setTags] = useState(
     (map.map_tags ?? []).map((mt) => mt.tags?.name).filter(Boolean).join(", ")
@@ -76,7 +99,9 @@ function MapEditor({ map, onStatus }: { map: AdminMap; onStatus: (id: string, s:
       <div className="row" style={{ alignItems: "flex-start" }}>
         {map.thumb_url && (
           <img src={map.thumb_url} alt={map.title}
-               style={{ width: 160, height: 160, objectFit: "cover", borderRadius: 8 }} />
+               title="Click to view full image"
+               onClick={() => onZoom(map.image_url ?? map.thumb_url!)}
+               style={{ width: 160, height: 160, objectFit: "cover", borderRadius: 8, cursor: "zoom-in" }} />
         )}
         <div style={{ flex: 1, minWidth: 280 }}>
           <p style={{ margin: "0 0 4px", fontWeight: 600 }}>{map.title}</p>
