@@ -192,38 +192,43 @@ def retag_existing(db: DB, cfg: Config) -> int:
     maps = db.all_maps()
     use_ai = cfg.ai_tagging
     log.info("Re-tagging %d existing map(s)%s…", len(maps), " with AI" if use_ai else "")
+    done = 0
     for m in maps:
-        title = m.get("title") or ""
-        author = m.get("reddit_author")
-        sub = m.get("source_subreddit") or "reddit"
-        tags = heuristic_tags(title)
-        # Keep already-detected dimensions/grid if the title alone can't recover them.
-        tags.dimensions = m.get("dimensions") or tags.dimensions
-        if tags.grid_type == "unknown" and m.get("grid_type"):
-            tags.grid_type = m["grid_type"]
-        tags.description = build_description(title, tags.tags, tags.dimensions, tags.grid_type, sub, author)
+        try:
+            title = m.get("title") or ""
+            author = m.get("reddit_author")
+            sub = m.get("source_subreddit") or "reddit"
+            tags = heuristic_tags(title)
+            # Keep already-detected dimensions/grid if the title alone can't recover them.
+            tags.dimensions = m.get("dimensions") or tags.dimensions
+            if tags.grid_type == "unknown" and m.get("grid_type"):
+                tags.grid_type = m["grid_type"]
+            tags.description = build_description(title, tags.tags, tags.dimensions, tags.grid_type, sub, author)
 
-        if use_ai:
-            img_url = m.get("thumb_url") or m.get("image_url")
-            if img_url:
-                try:
-                    from ai_tagging import ai_tags
-                    tags = merge_tags(tags, ai_tags(cfg, title, _fetch_image(img_url, cfg.reddit_user_agent)))
-                except Exception as e:  # noqa: BLE001
-                    log.warning("AI re-tag failed for %s: %s", m["id"], e)
+            if use_ai:
+                img_url = m.get("thumb_url") or m.get("image_url")
+                if img_url:
+                    try:
+                        from ai_tagging import ai_tags
+                        tags = merge_tags(tags, ai_tags(cfg, title, _fetch_image(img_url, cfg.reddit_user_agent)))
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("AI re-tag failed for %s: %s", m["id"], e)
 
-        fields = {"description": tags.description, "dimensions": tags.dimensions, "grid_type": tags.grid_type}
-        permalink = m.get("permalink") or ""
-        fixed = permalink[permalink.index("http", 1):] if permalink.count("http") > 1 else permalink
-        if fixed != permalink:
-            fields["permalink"] = fixed
-        db.update_map(m["id"], fields)
+            fields = {"description": tags.description, "dimensions": tags.dimensions, "grid_type": tags.grid_type}
+            permalink = m.get("permalink") or ""
+            fixed = permalink[permalink.index("http", 1):] if permalink.count("http") > 1 else permalink
+            if fixed != permalink:
+                fields["permalink"] = fixed
+            db.update_map(m["id"], fields)
 
-        db.clear_tags(m["id"])
-        tag_ids = [db.upsert_tag(name, cat) for name, cat in tags.tags]
-        db.link_tags(m["id"], tag_ids)
-    log.info("Re-tagged %d map(s).", len(maps))
-    return len(maps)
+            db.clear_tags(m["id"])
+            tag_ids = [db.upsert_tag(name, cat) for name, cat in tags.tags]
+            db.link_tags(m["id"], tag_ids)
+            done += 1
+        except Exception as e:  # noqa: BLE001 - skip a flaky map, keep the batch going
+            log.warning("Re-tag failed for %s, skipping: %s", m.get("id"), e)
+    log.info("Re-tagged %d/%d map(s).", done, len(maps))
+    return done
 
 
 def main() -> int:
