@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import time
 
 import requests
 from PIL import Image
@@ -87,11 +88,17 @@ def _openai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
         "max_tokens": 400,
         "temperature": 0.2,
     }
-    resp = requests.post(url, json=body,
-                         headers={"Authorization": f"Bearer {cfg.openai_api_key}"}, timeout=60)
-    resp.raise_for_status()
-    text = resp.json()["choices"][0]["message"]["content"]
-    return _to_result(json.loads(_strip_fence(text)))
+    headers = {"Authorization": f"Bearer {cfg.openai_api_key}"}
+    for attempt in range(4):
+        resp = requests.post(url, json=body, headers=headers, timeout=60)
+        if resp.status_code == 429:  # rate limited — honor Retry-After, then back off
+            wait = float(resp.headers.get("retry-after", 2 * (attempt + 1)))
+            time.sleep(min(wait, 30))
+            continue
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+        return _to_result(json.loads(_strip_fence(text)))
+    return None  # gave up after retries; caller keeps heuristic tags
 
 
 def _gemini_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
