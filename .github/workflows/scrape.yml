@@ -2,8 +2,9 @@ name: scrape-battlemaps
 
 on:
   schedule:
-    # Daily at 06:00 UTC. Also keeps the Supabase free project from auto-pausing.
-    - cron: "0 6 * * *"
+    # Hourly. (Repo is public → unlimited Actions minutes.) Also keeps Supabase awake.
+    # Most runs add little once backfilled — already-seen posts are skipped before download.
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       subreddit:

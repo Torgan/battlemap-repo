@@ -7,9 +7,10 @@ import type { SourceRow } from "@/lib/types";
 export default function Sources() {
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [sub, setSub] = useState("");
+  const [sort, setSort] = useState<SourceRow["sort"]>("top");
 
   const load = useCallback(() => {
-    supabase.from("sources").select("*").order("subreddit").then(({ data }) =>
+    supabase.from("sources").select("*").order("subreddit").order("sort").then(({ data }) =>
       setSources((data as SourceRow[]) ?? [])
     );
   }, []);
@@ -19,7 +20,10 @@ export default function Sources() {
     e.preventDefault();
     const name = sub.trim().replace(/^r\//, "");
     if (!name) return;
-    await supabase.from("sources").upsert({ subreddit: name }, { onConflict: "subreddit" });
+    // Composite unique is (subreddit, sort) — a subreddit can have both top and hot.
+    await supabase.from("sources").upsert(
+      { subreddit: name, sort }, { onConflict: "subreddit,sort" }
+    );
     setSub("");
     load();
   }
@@ -38,6 +42,11 @@ export default function Sources() {
     <>
       <form onSubmit={add} className="toolbar">
         <input placeholder="subreddit (e.g. battlemaps)" value={sub} onChange={(e) => setSub(e.target.value)} />
+        <select value={sort} onChange={(e) => setSort(e.target.value as SourceRow["sort"])}>
+          <option value="top">top</option>
+          <option value="hot">hot</option>
+          <option value="new">new</option>
+        </select>
         <button className="primary">Add source</button>
       </form>
 

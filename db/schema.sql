@@ -28,12 +28,13 @@ exception when duplicate_object then null; end $$;
 -- ---------------------------------------------------------------------------
 create table if not exists sources (
   id           bigint generated always as identity primary key,
-  subreddit    text not null unique,
+  subreddit    text not null,
   enabled      boolean not null default true,
   sort         source_sort not null default 'top',
   time_filter  text not null default 'month',   -- for 'top': hour|day|week|month|year|all
   min_score    int not null default 0,
-  last_run_at  timestamptz
+  last_run_at  timestamptz,
+  unique (subreddit, sort)                       -- allow e.g. both top and hot per subreddit
 );
 
 -- ---------------------------------------------------------------------------
@@ -104,8 +105,11 @@ create index if not exists map_tags_tag_idx on map_tags (tag_id);
 insert into sources (subreddit, sort, time_filter, min_score) values
   ('battlemaps', 'top', 'month', 0),
   ('dndmaps',    'top', 'month', 0),
-  ('FantasyMaps','top', 'month', 0)
-on conflict (subreddit) do nothing;
+  ('FantasyMaps','top', 'month', 0),
+  ('battlemaps', 'hot', 'month', 0),
+  ('dndmaps',    'hot', 'month', 0),
+  ('FantasyMaps','hot', 'month', 0)
+on conflict (subreddit, sort) do nothing;
 
 -- ===========================================================================
 -- Row Level Security
