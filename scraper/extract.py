@@ -1,9 +1,9 @@
-"""Resolve image URLs from Reddit submissions.
+"""Resolve image URLs from a Reddit post.
 
-Supported sources, in priority order:
-  * Direct i.redd.it / direct image URLs (.png/.jpg/.jpeg/.webp)
-  * Reddit galleries (media_metadata) -> first image
-Unsupported hosts (imgur albums, external sites, videos) are skipped with a reason.
+Returns a LIST of images so gallery posts can yield every image, not just the first:
+  * Reddit gallery (media_metadata, OAuth only)  -> every valid image, suffixes _1.._n
+  * direct image URL (.png/.jpg/.jpeg/.webp)     -> single image, no suffix
+  * RSS posts carry a pre-resolved single `url`  -> single image
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 class ExtractedImage:
     url: str
     ext: str
+    suffix: str = ""  # "" for a single image; "_1".."_n" for gallery items
 
 
 def _ext_from_url(url: str) -> str | None:
@@ -31,29 +32,36 @@ def _ext_from_url(url: str) -> str | None:
     return None
 
 
-def extract_image(submission: "Post") -> ExtractedImage | None:
-    """Return the best image for a submission, or None if unsupported."""
-    url = getattr(submission, "url", "") or ""
+def _ext_from_mime(mime: str) -> str | None:
+    if "/" not in mime:
+        return None
+    ext = "." + mime.split("/")[-1].replace("jpeg", "jpg")
+    return ext if ext in IMAGE_EXTS else None
 
-    # 1. Direct image link
-    ext = _ext_from_url(url)
-    if ext:
-        return ExtractedImage(url=url, ext=ext)
 
-    # 2. Reddit gallery: use media_metadata for the first valid image
-    if getattr(submission, "is_gallery", False):
-        media = getattr(submission, "media_metadata", None) or {}
-        gallery = getattr(submission, "gallery_data", None) or {}
-        order = [item["media_id"] for item in gallery.get("items", [])]
-        for media_id in order or media.keys():
-            meta = media.get(media_id)
+def extract_images(post: "Post") -> list[ExtractedImage]:
+    """Return every usable image for a post (galleries expand to all images)."""
+    media = getattr(post, "media_metadata", None)
+    gallery = getattr(post, "gallery_data", None)
+
+    # Reddit gallery (only available with OAuth/JSON, which carries media_metadata)
+    if getattr(post, "is_gallery", False) and media and gallery:
+        out: list[ExtractedImage] = []
+        for i, item in enumerate(gallery.get("items", []), start=1):
+            meta = media.get(item.get("media_id"))
             if not meta or meta.get("status") != "valid":
                 continue
-            mime = meta.get("m", "")  # e.g. "image/png"
-            ext = "." + mime.split("/")[-1].replace("jpeg", "jpg") if "/" in mime else None
+            ext = _ext_from_mime(meta.get("m", ""))
             src = (meta.get("s") or {}).get("u")  # full-size source URL
-            if src and ext in IMAGE_EXTS:
-                # media_metadata URLs are HTML-escaped
-                return ExtractedImage(url=src.replace("&amp;", "&"), ext=ext)
+            if src and ext:
+                out.append(ExtractedImage(src.replace("&amp;", "&"), ext, f"_{i}"))
+        if out:
+            return out
 
-    return None
+    # Single direct image (RSS pre-resolves post.url to this; OAuth uses the submitted URL)
+    url = getattr(post, "url", "") or ""
+    ext = _ext_from_url(url)
+    if ext:
+        return [ExtractedImage(url, ext, "")]
+
+    return []

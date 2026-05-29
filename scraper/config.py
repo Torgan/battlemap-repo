@@ -20,8 +20,12 @@ def _req(name: str) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    # Reddit (public JSON endpoints — only a descriptive User-Agent is needed)
+    # Reddit. A User-Agent is always needed. If client id/secret are set, the scraper
+    # uses authenticated OAuth (oauth.reddit.com) — full galleries, more robust. Without
+    # them it falls back to the public RSS feeds.
     reddit_user_agent: str
+    reddit_client_id: str | None
+    reddit_client_secret: str | None
     # Supabase
     supabase_url: str
     supabase_service_key: str
@@ -47,6 +51,8 @@ class Config:
             reddit_user_agent=os.getenv(
                 "REDDIT_USER_AGENT", "battlemap-repo/0.1 (personal map archive)"
             ),
+            reddit_client_id=os.getenv("REDDIT_CLIENT_ID") or None,
+            reddit_client_secret=os.getenv("REDDIT_CLIENT_SECRET") or None,
             supabase_url=cloud("SUPABASE_URL"),
             supabase_service_key=cloud("SUPABASE_SERVICE_KEY"),
             r2_account_id=cloud("R2_ACCOUNT_ID"),

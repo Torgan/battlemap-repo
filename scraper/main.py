@@ -15,7 +15,7 @@ import sys
 from config import Config
 from db import DB
 from dedupe import is_near_duplicate, phash_hex
-from extract import extract_image
+from extract import extract_images
 from reddit_client import iter_submissions, make_reddit
 from storage import R2, download_and_process
 from tagging import TagResult, build_description, heuristic_tags
@@ -52,25 +52,13 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
         score = getattr(sub_post, "score", 0)
         if score and source.get("min_score", 0) and score < source["min_score"]:
             continue
-        if not dry and db.post_exists(sub_post.id):
-            continue
 
-        img = extract_image(sub_post)
-        if img is None:
+        images = extract_images(sub_post)
+        if not images:
             log.debug("skip %s: no supported image (%s)", sub_post.id, sub_post.url)
             continue
 
-        try:
-            processed = download_and_process(img.url, img.ext, cfg.reddit_user_agent)
-        except Exception as e:  # noqa: BLE001 - keep the run going
-            log.warning("skip %s: download/process failed: %s", sub_post.id, e)
-            continue
-
-        ph = phash_hex(processed.pil_image)
-        if is_near_duplicate(ph, known_hashes, cfg.phash_max_distance):
-            log.info("skip %s: near-duplicate (phash)", sub_post.id)
-            continue
-
+        # Tags + description are computed once per post and shared across gallery images.
         flair = getattr(sub_post, "link_flair_text", None)
         body = getattr(sub_post, "selftext", "")
         author = getattr(sub_post.author, "name", None) if sub_post.author else None
@@ -78,57 +66,76 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
         tags.description = build_description(
             sub_post.title, tags.tags, tags.dimensions, tags.grid_type, sub, author
         )
-        if cfg.ai_tagging:
-            try:
-                from ai_tagging import ai_tags
-                tags = merge_tags(tags, ai_tags(cfg, sub_post.title, processed.pil_image))
-            except Exception as e:  # noqa: BLE001
-                log.warning("AI tagging failed for %s: %s", sub_post.id, e)
-
-        if dry:
-            log.info("[dry] %s | %dx%d | grid=%s dims=%s | tags=%s",
-                     sub_post.title[:60], processed.width, processed.height,
-                     tags.grid_type, tags.dimensions, [t[0] for t in tags.tags])
-            added += 1
-            continue
-
-        # Upload to R2
-        image_key = f"maps/{sub_post.id}{img.ext}"
-        thumb_key = f"thumbs/{sub_post.id}.webp"
-        image_url = r2.upload(image_key, processed.image_bytes, processed.content_type)
-        thumb_url = r2.upload(thumb_key, processed.thumb_bytes, "image/webp")
-
         permalink = sub_post.permalink
         if not permalink.startswith("http"):
             permalink = f"https://www.reddit.com{permalink}"
-        map_id = db.insert_map({
-            "reddit_post_id": sub_post.id,
-            "source_subreddit": sub,
-            "title": sub_post.title,
-            "reddit_author": author,
-            "permalink": permalink,
-            "image_key": image_key,
-            "thumb_key": thumb_key,
-            "image_url": image_url,
-            "thumb_url": thumb_url,
-            "width": processed.width,
-            "height": processed.height,
-            "file_size": len(processed.image_bytes),
-            "phash": ph,
-            "grid_type": tags.grid_type,
-            "dimensions": tags.dimensions,
-            "description": tags.description,
-            "score": getattr(sub_post, "score", 0),
-            "created_utc": _utc(sub_post.created_utc),
-            "status": "pending",
-        })
+        multi = len(images) > 1
 
-        tag_ids = [db.upsert_tag(name, cat) for name, cat in tags.tags]
-        db.link_tags(map_id, tag_ids)
+        for img in images:
+            # Composite id per image so gallery entries are distinct (e.g. abc123_2).
+            rid = f"{sub_post.id}{img.suffix}"
+            if not dry and db.post_exists(rid):
+                continue
+            try:
+                processed = download_and_process(img.url, img.ext, cfg.reddit_user_agent)
+            except Exception as e:  # noqa: BLE001 - keep the run going
+                log.warning("skip %s: download/process failed: %s", rid, e)
+                continue
 
-        known_hashes.append(ph)
-        added += 1
-        log.info("added %s (%s)", sub_post.id, sub_post.title[:60])
+            ph = phash_hex(processed.pil_image)
+            if is_near_duplicate(ph, known_hashes, cfg.phash_max_distance):
+                log.info("skip %s: near-duplicate (phash)", rid)
+                continue
+
+            post_tags = tags
+            if cfg.ai_tagging:
+                try:
+                    from ai_tagging import ai_tags
+                    post_tags = merge_tags(tags, ai_tags(cfg, sub_post.title, processed.pil_image))
+                except Exception as e:  # noqa: BLE001
+                    log.warning("AI tagging failed for %s: %s", rid, e)
+
+            if dry:
+                log.info("[dry] %s | %dx%d | grid=%s dims=%s | tags=%s",
+                         (sub_post.title + img.suffix)[:60], processed.width, processed.height,
+                         post_tags.grid_type, post_tags.dimensions, [t[0] for t in post_tags.tags])
+                known_hashes.append(ph)
+                added += 1
+                continue
+
+            image_key = f"maps/{rid}{img.ext}"
+            thumb_key = f"thumbs/{rid}.webp"
+            image_url = r2.upload(image_key, processed.image_bytes, processed.content_type)
+            thumb_url = r2.upload(thumb_key, processed.thumb_bytes, "image/webp")
+
+            title = f"{sub_post.title} ({img.suffix.lstrip('_')})" if multi else sub_post.title
+            map_id = db.insert_map({
+                "reddit_post_id": rid,
+                "source_subreddit": sub,
+                "title": title,
+                "reddit_author": author,
+                "permalink": permalink,
+                "image_key": image_key,
+                "thumb_key": thumb_key,
+                "image_url": image_url,
+                "thumb_url": thumb_url,
+                "width": processed.width,
+                "height": processed.height,
+                "file_size": len(processed.image_bytes),
+                "phash": ph,
+                "grid_type": post_tags.grid_type,
+                "dimensions": post_tags.dimensions,
+                "description": post_tags.description,
+                "score": score,
+                "created_utc": _utc(sub_post.created_utc),
+                "status": "pending",
+            })
+            tag_ids = [db.upsert_tag(name, cat) for name, cat in post_tags.tags]
+            db.link_tags(map_id, tag_ids)
+
+            known_hashes.append(ph)
+            added += 1
+            log.info("added %s (%s)", rid, title[:60])
 
     if not dry:
         db.touch_source(source["id"])
