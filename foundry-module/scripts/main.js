@@ -33,6 +33,14 @@ Hooks.once("init", () => {
     type: Number,
     default: 100,
   });
+  game.settings.register(MODULE_ID, "sceneFolder", {
+    name: "Imported scenes folder",
+    hint: "Imported maps are placed in this Scenes folder (created if missing). Leave blank for no folder.",
+    scope: "world",
+    config: true,
+    type: String,
+    default: "Battlemap Repository",
+  });
 
   // Serialize a map object into a URI-encoded JSON string for a data attribute.
   Handlebars.registerHelper("encodeMap", (map) => encodeURIComponent(JSON.stringify(map)));
@@ -76,12 +84,23 @@ function computeGridSize(map, fallback) {
   return fallback;
 }
 
+// Find (or create) the configured Scenes folder; null if the setting is blank.
+async function getSceneFolder() {
+  const name = (game.settings.get(MODULE_ID, "sceneFolder") || "").trim();
+  if (!name) return null;
+  let folder = game.folders.find((f) => f.type === "Scene" && f.name === name);
+  if (!folder) folder = await Folder.create({ name, type: "Scene" });
+  return folder;
+}
+
 async function importAsScene(map) {
   const defaultSize = game.settings.get(MODULE_ID, "defaultGridSize");
   const gridSize = computeGridSize(map, defaultSize);
+  const folder = await getSceneFolder();
 
   const data = {
     name: map.title.slice(0, 100),
+    folder: folder?.id ?? null,
     width: map.width ?? 4000,
     height: map.height ?? 3000,
     padding: 0.25,
@@ -146,9 +165,19 @@ class BattlemapBrowser extends Application {
 
     root.querySelectorAll(".bm-import").forEach((el) => {
       el.addEventListener("click", async (ev) => {
-        const card = ev.target.closest(".bm-card");
-        const map = JSON.parse(decodeURIComponent(card.dataset.map));
-        await importAsScene(map);
+        const button = ev.currentTarget;
+        button.disabled = true;
+        try {
+          const card = ev.target.closest(".bm-card");
+          const map = JSON.parse(decodeURIComponent(card.dataset.map));
+          const scene = await importAsScene(map);
+          this.close();          // close the browser once the scene is imported
+          scene?.view?.();       // and jump to the freshly imported scene
+        } catch (e) {
+          button.disabled = false;
+          ui.notifications.error(`Import failed: ${e.message}`);
+          console.error(e);
+        }
       });
     });
   }
