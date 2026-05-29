@@ -2,9 +2,10 @@ name: scrape-battlemaps
 
 on:
   schedule:
-    # Hourly. (Repo is public → unlimited Actions minutes.) Also keeps Supabase awake.
-    # Most runs add little once backfilled — already-seen posts are skipped before download.
-    - cron: "0 * * * *"
+    # Hourly at :23 — deliberately off the top of the hour, which is heavily congested on
+    # GitHub's scheduler (minute-0 jobs get queued/delayed/skipped). (Public repo → unlimited
+    # minutes.) Already-seen posts are skipped before download, so runs stay cheap.
+    - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       subreddit:
