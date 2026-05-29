@@ -147,6 +147,29 @@ def _utc(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
 
 
+def cleanup_removed(db: DB, r2: R2) -> int:
+    """Delete R2 objects for rejected/removed maps to reclaim storage.
+
+    The DB row is kept (as a tombstone) so the post isn't re-scraped; only the R2
+    objects are deleted and the key/url columns are nulled.
+    """
+    rows = db.maps_to_purge()
+    purged = 0
+    for r in rows:
+        for key in (r.get("image_key"), r.get("thumb_key")):
+            if key:
+                try:
+                    r2.delete(key)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("R2 delete failed for %s: %s", key, e)
+        db.update_map(r["id"], {"image_key": None, "thumb_key": None,
+                                "image_url": None, "thumb_url": None})
+        purged += 1
+    if purged:
+        log.info("Purged R2 objects for %d rejected/removed map(s).", purged)
+    return purged
+
+
 def retag_existing(db: DB) -> int:
     """Recompute heuristic tags + templated descriptions for maps already in the DB.
 
@@ -186,10 +209,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Fetch + tag but don't upload/write.")
     parser.add_argument("--retag", action="store_true",
                         help="Recompute tags/descriptions for maps already in the DB, then exit.")
+    parser.add_argument("--cleanup", action="store_true",
+                        help="Only delete R2 objects for rejected/removed maps, then exit.")
     args = parser.parse_args()
 
     if args.retag:
         return 0 if retag_existing(DB(Config.load())) >= 0 else 1
+
+    if args.cleanup:
+        cfg = Config.load()
+        cleanup_removed(DB(cfg), R2(cfg))
+        return 0
 
     cfg = Config.load(require_cloud=not args.dry_run)
     reddit = make_reddit(cfg)
@@ -215,6 +245,10 @@ def main() -> int:
     total = 0
     for source in sources:
         total += process_source(cfg, db, r2, reddit, source, limit, args.dry_run)
+
+    # Reclaim storage from any maps moderated as rejected/removed since the last run.
+    if not args.dry_run:
+        cleanup_removed(db, r2)
 
     log.info("Done. %d map(s) %s.", total, "previewed" if args.dry_run else "added")
     return 0

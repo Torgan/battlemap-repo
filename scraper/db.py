@@ -47,6 +47,14 @@ class DB:
     def clear_tags(self, map_id: str) -> None:
         self.client.table("map_tags").delete().eq("map_id", map_id).execute()
 
+    def maps_to_purge(self) -> list[dict[str, Any]]:
+        """Rejected/removed maps that still have R2 objects to delete."""
+        res = (self.client.table("maps")
+               .select("id,image_key,thumb_key")
+               .in_("status", ["rejected", "removed"])
+               .execute())
+        return [r for r in (res.data or []) if r.get("image_key") or r.get("thumb_key")]
+
     # ---- tags ----
     def upsert_tag(self, name: str, category: str) -> int:
         # tags.name is unique; upsert then read back the id.
