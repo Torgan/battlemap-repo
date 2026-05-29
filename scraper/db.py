@@ -37,7 +37,8 @@ class DB:
 
     def all_maps(self) -> list[dict[str, Any]]:
         res = (self.client.table("maps")
-               .select("id,title,source_subreddit,reddit_author,dimensions,grid_type,permalink")
+               .select("id,title,source_subreddit,reddit_author,dimensions,grid_type,"
+                       "permalink,thumb_url,image_url,status")
                .execute())
         return res.data or []
 

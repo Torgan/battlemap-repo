@@ -35,8 +35,10 @@ class Config:
     r2_secret_access_key: str
     r2_bucket: str
     r2_public_base_url: str
-    # AI tagging (optional)
-    ai_tagging: bool
+    # AI tagging (optional). Provider: "" (off) | "gemini" (free tier) | "anthropic".
+    ai_provider: str
+    gemini_api_key: str | None
+    gemini_model: str
     anthropic_api_key: str | None
     anthropic_model: str
     # Tuning
@@ -60,9 +62,20 @@ class Config:
             r2_secret_access_key=cloud("R2_SECRET_ACCESS_KEY"),
             r2_bucket=os.getenv("R2_BUCKET", "battlemaps"),
             r2_public_base_url=cloud("R2_PUBLIC_BASE_URL").rstrip("/"),
-            ai_tagging=os.getenv("AI_TAGGING", "0") in ("1", "true", "True"),
+            ai_provider=os.getenv("AI_PROVIDER", "").lower().strip(),
+            gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
+            gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
             default_fetch_limit=int(os.getenv("DEFAULT_FETCH_LIMIT", "50")),
             phash_max_distance=int(os.getenv("PHASH_MAX_DISTANCE", "4")),
         )
+
+    @property
+    def ai_tagging(self) -> bool:
+        """True when an AI provider is selected and its API key is present."""
+        if self.ai_provider == "gemini":
+            return bool(self.gemini_api_key)
+        if self.ai_provider == "anthropic":
+            return bool(self.anthropic_api_key)
+        return False

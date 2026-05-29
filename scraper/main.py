@@ -12,6 +12,8 @@ import argparse
 import logging
 import sys
 
+import requests
+
 from config import Config
 from db import DB
 from dedupe import is_near_duplicate, phash_hex
@@ -170,25 +172,47 @@ def cleanup_removed(db: DB, r2: R2) -> int:
     return purged
 
 
-def retag_existing(db: DB) -> int:
-    """Recompute heuristic tags + templated descriptions for maps already in the DB.
+def _fetch_image(url: str, user_agent: str):
+    """Download an image URL into a PIL Image (used for AI re-tagging)."""
+    import io
+    from PIL import Image
+    resp = requests.get(url, headers={"User-Agent": user_agent}, timeout=60)
+    resp.raise_for_status()
+    img = Image.open(io.BytesIO(resp.content))
+    img.load()
+    return img
 
-    Uses only stored metadata (title, dimensions, etc.) — no re-download. Also repairs
-    any malformed permalinks.
+
+def retag_existing(db: DB, cfg: Config) -> int:
+    """Recompute tags + descriptions for maps already in the DB.
+
+    Heuristics from title always; if an AI provider is configured, also runs vision tagging
+    on each map's (already-hosted) image and merges it. Repairs malformed permalinks too.
     """
     maps = db.all_maps()
-    log.info("Re-tagging %d existing map(s)…", len(maps))
+    use_ai = cfg.ai_tagging
+    log.info("Re-tagging %d existing map(s)%s…", len(maps), " with AI" if use_ai else "")
     for m in maps:
         title = m.get("title") or ""
-        tags = heuristic_tags(title)
-        # Keep already-detected dimensions/grid if the title alone can't recover them.
-        dims = m.get("dimensions") or tags.dimensions
-        grid = tags.grid_type if tags.grid_type != "unknown" else (m.get("grid_type") or "unknown")
         author = m.get("reddit_author")
         sub = m.get("source_subreddit") or "reddit"
-        description = build_description(title, tags.tags, dims, grid, sub, author)
+        tags = heuristic_tags(title)
+        # Keep already-detected dimensions/grid if the title alone can't recover them.
+        tags.dimensions = m.get("dimensions") or tags.dimensions
+        if tags.grid_type == "unknown" and m.get("grid_type"):
+            tags.grid_type = m["grid_type"]
+        tags.description = build_description(title, tags.tags, tags.dimensions, tags.grid_type, sub, author)
 
-        fields = {"description": description, "dimensions": dims, "grid_type": grid}
+        if use_ai:
+            img_url = m.get("thumb_url") or m.get("image_url")
+            if img_url:
+                try:
+                    from ai_tagging import ai_tags
+                    tags = merge_tags(tags, ai_tags(cfg, title, _fetch_image(img_url, cfg.reddit_user_agent)))
+                except Exception as e:  # noqa: BLE001
+                    log.warning("AI re-tag failed for %s: %s", m["id"], e)
+
+        fields = {"description": tags.description, "dimensions": tags.dimensions, "grid_type": tags.grid_type}
         permalink = m.get("permalink") or ""
         fixed = permalink[permalink.index("http", 1):] if permalink.count("http") > 1 else permalink
         if fixed != permalink:
@@ -214,7 +238,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.retag:
-        return 0 if retag_existing(DB(Config.load())) >= 0 else 1
+        cfg = Config.load()
+        return 0 if retag_existing(DB(cfg), cfg) >= 0 else 1
 
     if args.cleanup:
         cfg = Config.load()

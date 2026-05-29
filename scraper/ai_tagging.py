@@ -1,7 +1,11 @@
-"""Optional Claude-vision tagging. Disabled unless AI_TAGGING=1.
+"""Optional AI vision tagging. Looks at the map image + title and returns rich tags + a
+description. Two providers:
 
-Sends a downscaled image + title to Claude and asks for tags + a short description.
-Cheap with Haiku (~$0.003/map). Merges its tags with the heuristic ones.
+  * "gemini"    — Google Gemini (free tier: ~1500 req/day). Default/recommended.
+  * "anthropic" — Claude (paid, ~$0.003/map).
+
+Selected via AI_PROVIDER. Disabled when unset or the matching API key is missing.
+Merged with the heuristic tags by the caller.
 """
 from __future__ import annotations
 
@@ -9,65 +13,36 @@ import base64
 import io
 import json
 
+import requests
 from PIL import Image
 
 from config import Config
 from tagging import TagResult
 
-_AI_MAX = 1024  # downscale longest edge before sending (cheaper tokens)
+_MAX_EDGE = 768  # downscale longest edge before sending (cheaper/faster, plenty for tagging)
 
 _PROMPT = """You are tagging a TTRPG battlemap image for a personal map library.
 Reddit post title: "{title}"
 
-Return STRICT JSON only, no prose:
+Return STRICT JSON only (no markdown, no prose):
 {{
-  "tags": ["lowercase", "single-or-two-word", "tags"],
+  "tags": ["lowercase", "one-or-two-word", "tags"],
   "grid_type": "grid" | "gridless" | "unknown",
   "dimensions": "WxH or null",
-  "description": "one or two sentence factual description of the map"
+  "description": "one or two factual sentences describing the map"
 }}
 Tags should cover terrain, setting, and notable features. Max 8 tags."""
 
 
 def _encode(img: Image.Image) -> tuple[str, str]:
     thumb = img.convert("RGB")
-    thumb.thumbnail((_AI_MAX, _AI_MAX), Image.LANCZOS)
+    thumb.thumbnail((_MAX_EDGE, _MAX_EDGE), Image.LANCZOS)
     buf = io.BytesIO()
     thumb.save(buf, format="JPEG", quality=85)
     return base64.standard_b64encode(buf.getvalue()).decode(), "image/jpeg"
 
 
-def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
-    if not cfg.ai_tagging or not cfg.anthropic_api_key:
-        return None
-    try:
-        import anthropic
-    except ImportError:
-        return None
-
-    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
-    b64, media_type = _encode(img)
-
-    msg = client.messages.create(
-        model=cfg.anthropic_model,
-        max_tokens=400,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image", "source": {"type": "base64",
-                                              "media_type": media_type, "data": b64}},
-                {"type": "text", "text": _PROMPT.format(title=title)},
-            ],
-        }],
-    )
-    text = "".join(b.text for b in msg.content if b.type == "text").strip()
-    text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-
+def _to_result(data: dict) -> TagResult:
     result = TagResult()
     for name in data.get("tags", [])[:8]:
         if isinstance(name, str) and name.strip():
@@ -76,9 +51,58 @@ def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
     if gt in ("grid", "gridless", "unknown"):
         result.grid_type = gt
     dims = data.get("dimensions")
-    if isinstance(dims, str) and dims.lower() != "null":
-        result.dimensions = dims
+    if isinstance(dims, str) and dims.lower() != "null" and dims.strip():
+        result.dimensions = dims.strip()
     desc = data.get("description")
     if isinstance(desc, str) and desc.strip():
         result.description = desc.strip()
     return result
+
+
+def _strip_fence(text: str) -> str:
+    return text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+
+def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
+    if cfg.ai_provider == "gemini" and cfg.gemini_api_key:
+        return _gemini_tags(cfg, title, img)
+    if cfg.ai_provider == "anthropic" and cfg.anthropic_api_key:
+        return _claude_tags(cfg, title, img)
+    return None
+
+
+def _gemini_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
+    b64, mime = _encode(img)
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{cfg.gemini_model}:generateContent?key={cfg.gemini_api_key}")
+    body = {
+        "contents": [{"parts": [
+            {"inline_data": {"mime_type": mime, "data": b64}},
+            {"text": _PROMPT.format(title=title)},
+        ]}],
+        "generationConfig": {"responseMimeType": "application/json",
+                             "temperature": 0.2, "maxOutputTokens": 400},
+    }
+    resp = requests.post(url, json=body, timeout=60)
+    resp.raise_for_status()
+    text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+    return _to_result(json.loads(_strip_fence(text)))
+
+
+def _claude_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    b64, mime = _encode(img)
+    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key)
+    msg = client.messages.create(
+        model=cfg.anthropic_model,
+        max_tokens=400,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}},
+            {"type": "text", "text": _PROMPT.format(title=title)},
+        ]}],
+    )
+    text = "".join(b.text for b in msg.content if b.type == "text")
+    return _to_result(json.loads(_strip_fence(text)))
