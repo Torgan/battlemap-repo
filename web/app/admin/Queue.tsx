@@ -44,6 +44,14 @@ export default function Queue() {
     setMaps((prev) => prev.filter((m) => m.id !== id));
   }
 
+  // Bulk-approve every map currently in this status (whole DB, not just the loaded page).
+  async function approveAll() {
+    if (!confirm(`Approve ALL "${status}" maps? This affects every map with that status.`)) return;
+    setLoading(true);
+    await supabase.from("maps").update({ status: "approved" }).eq("status", status);
+    load();
+  }
+
   return (
     <>
       <div className="toolbar">
@@ -55,6 +63,11 @@ export default function Queue() {
         <span className="muted" style={{ alignSelf: "center" }}>
           {loading ? "…" : `${maps.length} map(s)`}
         </span>
+        {(status === "pending" || status === "hidden") && maps.length > 0 && (
+          <button className="green" style={{ marginLeft: "auto" }} onClick={approveAll}>
+            ✓ Approve all
+          </button>
+        )}
       </div>
 
       {maps.map((m) => (
