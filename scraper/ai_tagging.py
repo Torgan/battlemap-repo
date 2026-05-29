@@ -64,11 +64,34 @@ def _strip_fence(text: str) -> str:
 
 
 def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
+    if cfg.ai_provider == "openai" and cfg.openai_api_key:
+        return _openai_tags(cfg, title, img)
     if cfg.ai_provider == "gemini" and cfg.gemini_api_key:
         return _gemini_tags(cfg, title, img)
     if cfg.ai_provider == "anthropic" and cfg.anthropic_api_key:
         return _claude_tags(cfg, title, img)
     return None
+
+
+def _openai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
+    """OpenAI-compatible chat completions with an image. Works with Groq, OpenRouter,
+    Mistral, Together, etc. via OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL."""
+    b64, mime = _encode(img)
+    url = cfg.openai_base_url.rstrip("/") + "/chat/completions"
+    body = {
+        "model": cfg.openai_model,
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": _PROMPT.format(title=title)},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+        ]}],
+        "max_tokens": 400,
+        "temperature": 0.2,
+    }
+    resp = requests.post(url, json=body,
+                         headers={"Authorization": f"Bearer {cfg.openai_api_key}"}, timeout=60)
+    resp.raise_for_status()
+    text = resp.json()["choices"][0]["message"]["content"]
+    return _to_result(json.loads(_strip_fence(text)))
 
 
 def _gemini_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:

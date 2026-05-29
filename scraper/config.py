@@ -35,8 +35,12 @@ class Config:
     r2_secret_access_key: str
     r2_bucket: str
     r2_public_base_url: str
-    # AI tagging (optional). Provider: "" (off) | "gemini" (free tier) | "anthropic".
+    # AI tagging (optional). Provider: "" (off) | "openai" (Groq/OpenRouter/Mistral/…, free &
+    # EU-friendly) | "gemini" (free tier, NOT available in EU) | "anthropic" (paid).
     ai_provider: str
+    openai_base_url: str
+    openai_api_key: str | None
+    openai_model: str
     gemini_api_key: str | None
     gemini_model: str
     anthropic_api_key: str | None
@@ -63,6 +67,9 @@ class Config:
             r2_bucket=os.getenv("R2_BUCKET", "battlemaps"),
             r2_public_base_url=cloud("R2_PUBLIC_BASE_URL").rstrip("/"),
             ai_provider=os.getenv("AI_PROVIDER", "").lower().strip(),
+            openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1"),
+            openai_api_key=os.getenv("OPENAI_API_KEY") or None,
+            openai_model=os.getenv("OPENAI_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
             gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
@@ -74,6 +81,8 @@ class Config:
     @property
     def ai_tagging(self) -> bool:
         """True when an AI provider is selected and its API key is present."""
+        if self.ai_provider == "openai":
+            return bool(self.openai_api_key and self.openai_base_url)
         if self.ai_provider == "gemini":
             return bool(self.gemini_api_key)
         if self.ai_provider == "anthropic":
