@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+web/.vercel/
+web/next-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+
+# Scraper scratch
+scraper/.cache/
+*.log
+
+# OS
+.DS_Store

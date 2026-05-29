@@ -1,0 +1,29 @@
+<div class="battlemap-repo-browser">
+  <div class="bm-toolbar">
+    <input type="text" class="bm-search" placeholder="Search title, tags, subreddit…" />
+    <span class="bm-count">{{count}} map(s)</span>
+  </div>
+
+  {{#if count}}
+  <div class="bm-grid">
+    {{#each maps as |map|}}
+    <div class="bm-card"
+         data-search="{{map.title}} {{map.source_subreddit}} {{#each map.tags}}{{this}} {{/each}}"
+         data-map="{{encodeMap map}}">
+      <img src="{{map.thumb_url}}" alt="{{map.title}}" loading="lazy" />
+      <div class="bm-card-body">
+        <div class="bm-card-title" title="{{map.title}}">{{map.title}}</div>
+        <div class="bm-card-meta">
+          {{#if map.dimensions}}<span class="bm-tag">{{map.dimensions}}</span>{{/if}}
+          <span class="bm-tag">{{map.grid_type}}</span>
+          {{#each map.tags}}<span class="bm-tag">{{this}}</span>{{/each}}
+        </div>
+        <button type="button" class="bm-import"><i class="fas fa-download"></i> Import as Scene</button>
+      </div>
+    </div>
+    {{/each}}
+  </div>
+  {{else}}
+  <p class="bm-empty">No approved maps found. Check your Supabase URL/key in module settings, or approve maps in the admin.</p>
+  {{/if}}
+</div>

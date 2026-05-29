@@ -1,0 +1,62 @@
+"""Environment-backed configuration for the scraper."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load ../.env (repo root) if present; in CI the env is provided directly.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+
+def _req(name: str) -> str:
+    val = os.getenv(name)
+    if not val:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return val
+
+
+@dataclass(frozen=True)
+class Config:
+    # Reddit (public JSON endpoints — only a descriptive User-Agent is needed)
+    reddit_user_agent: str
+    # Supabase
+    supabase_url: str
+    supabase_service_key: str
+    # R2
+    r2_account_id: str
+    r2_access_key_id: str
+    r2_secret_access_key: str
+    r2_bucket: str
+    r2_public_base_url: str
+    # AI tagging (optional)
+    ai_tagging: bool
+    anthropic_api_key: str | None
+    anthropic_model: str
+    # Tuning
+    default_fetch_limit: int
+    phash_max_distance: int
+
+    @classmethod
+    def load(cls, require_cloud: bool = True) -> "Config":
+        # require_cloud=False allows a credential-free --dry-run (only Reddit is needed).
+        cloud = _req if require_cloud else (lambda n: os.getenv(n, ""))
+        return cls(
+            reddit_user_agent=os.getenv(
+                "REDDIT_USER_AGENT", "battlemap-repo/0.1 (personal map archive)"
+            ),
+            supabase_url=cloud("SUPABASE_URL"),
+            supabase_service_key=cloud("SUPABASE_SERVICE_KEY"),
+            r2_account_id=cloud("R2_ACCOUNT_ID"),
+            r2_access_key_id=cloud("R2_ACCESS_KEY_ID"),
+            r2_secret_access_key=cloud("R2_SECRET_ACCESS_KEY"),
+            r2_bucket=os.getenv("R2_BUCKET", "battlemaps"),
+            r2_public_base_url=cloud("R2_PUBLIC_BASE_URL").rstrip("/"),
+            ai_tagging=os.getenv("AI_TAGGING", "0") in ("1", "true", "True"),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+            anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+            default_fetch_limit=int(os.getenv("DEFAULT_FETCH_LIMIT", "50")),
+            phash_max_distance=int(os.getenv("PHASH_MAX_DISTANCE", "4")),
+        )
