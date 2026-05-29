@@ -65,12 +65,23 @@ async function fetchApprovedMaps() {
   return res.json();
 }
 
+// Derive pixels-per-square from "WxH" dimensions + the image width, when possible.
+function computeGridSize(map, fallback) {
+  if (map.grid_size) return map.grid_size;
+  const m = map.dimensions && /^(\d+)\s*[x×]\s*(\d+)$/i.exec(map.dimensions);
+  if (m && map.width) {
+    const cols = parseInt(m[1], 10);
+    if (cols > 0) return Math.max(10, Math.round(map.width / cols));
+  }
+  return fallback;
+}
+
 async function importAsScene(map) {
   const defaultSize = game.settings.get(MODULE_ID, "defaultGridSize");
-  const gridSize = map.grid_size || defaultSize;
+  const gridSize = computeGridSize(map, defaultSize);
+
   const data = {
     name: map.title.slice(0, 100),
-    background: { src: map.image_url },
     width: map.width ?? 4000,
     height: map.height ?? 3000,
     padding: 0.25,
@@ -79,8 +90,25 @@ async function importAsScene(map) {
       size: gridSize,
     },
   };
+
+  // Foundry v14 moved the background image into the Level structure
+  // (levels[].background.src); v12/v13 use the top-level background.src.
+  const generation = game.release?.generation ?? 13;
+  if (generation >= 14) {
+    data.levels = [{ _id: "defaultLevel0000", name: "Level", background: { src: map.image_url } }];
+    data.initialLevel = "defaultLevel0000";
+  } else {
+    data.background = { src: map.image_url };
+  }
+
   const scene = await Scene.create(data);
-  await scene?.createThumbnail?.().then((t) => scene.update({ thumb: t.thumb })).catch(() => {});
+
+  // Best-effort thumbnail (API differs across versions; never block the import on it).
+  try {
+    const t = await scene?.createThumbnail?.();
+    if (t?.thumb) await scene.update({ thumb: t.thumb });
+  } catch (_e) { /* ignore */ }
+
   ui.notifications.info(`Imported scene: ${map.title}`);
   return scene;
 }

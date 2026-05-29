@@ -2,10 +2,10 @@
   "id": "battlemap-repo",
   "title": "Battlemap Repository",
   "description": "Browse your personal battlemap repository and import maps as Scenes.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "compatibility": {
     "minimum": "12",
-    "verified": "13"
+    "verified": "14"
   },
   "authors": [{ "name": "you" }],
   "esmodules": ["scripts/main.js"],
