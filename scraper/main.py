@@ -25,6 +25,10 @@ from tagging import TagResult, build_description, heuristic_tags
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("scraper")
 
+# Each 'top' source is fetched across these windows for a deep backfill (best-of-all-time
+# down to recent). Dedupe (post id + phash) collapses overlaps.
+TOP_WINDOWS = ["month", "year", "all"]
+
 
 def merge_tags(base: TagResult, extra: TagResult | None) -> TagResult:
     if not extra:
@@ -274,7 +278,11 @@ def main() -> int:
     limit = args.limit or cfg.default_fetch_limit
     total = 0
     for source in sources:
-        total += process_source(cfg, db, r2, reddit, source, limit, args.dry_run)
+        # 'top' sources sweep multiple time windows; 'hot'/'new' run once.
+        windows = TOP_WINDOWS if source["sort"] == "top" else [source["time_filter"]]
+        for tf in windows:
+            total += process_source(cfg, db, r2, reddit, {**source, "time_filter": tf},
+                                    limit, args.dry_run)
 
     # Reclaim storage from any maps moderated as rejected/removed since the last run.
     if not args.dry_run:
