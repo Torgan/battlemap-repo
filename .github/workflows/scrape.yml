@@ -17,6 +17,12 @@ on:
         required: false
         default: "50"
 
+# Never run two scrapes at once — overlapping runs race on the post-exists dedupe check.
+# A new run waits for the in-progress one to finish rather than racing it.
+concurrency:
+  group: scrape-battlemaps
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
