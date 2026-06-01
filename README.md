@@ -42,8 +42,10 @@ Reddit API ──(PRAW)──> Scraper (Python, GitHub Actions cron)
    (e.g. `https://www.reddit.com/r/battlemaps/top.json`) with a descriptive User-Agent and
    polite rate-limiting. Just set `REDDIT_USER_AGENT` in `.env`.
 2. **Supabase** — create a project. From *Project Settings → API* copy `SUPABASE_URL`,
-   the **anon** key, and the **service_role** key. Then run `db/schema.sql` in the SQL
-   editor.
+   the **anon** key, and the **service_role** key. Run `db/schema.sql` once in the SQL
+   editor to create the schema. Incremental changes live in `db/migrations/` and apply
+   automatically on deploy via the `migrate-db` workflow (needs the `SUPABASE_DB_URL`
+   secret = the session-pooler Postgres connection string) — no more manual SQL.
 3. **Cloudflare R2** — create a bucket (default name `battlemaps`), enable public access
    (r2.dev or a custom domain) and copy that base URL into `R2_PUBLIC_BASE_URL`. Create an
    R2 API token for the access key id/secret. Account id is in the dashboard URL.
