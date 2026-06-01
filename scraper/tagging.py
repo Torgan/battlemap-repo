@@ -77,6 +77,7 @@ class TagResult:
     grid_type: str = "unknown"   # grid | gridless | unknown
     dimensions: str | None = None
     description: str | None = None
+    scale: str | None = None     # battlemap | region | world (set by AI vision only)
 
 
 def heuristic_tags(title: str, body: str | None = None, flair: str | None = None) -> TagResult:

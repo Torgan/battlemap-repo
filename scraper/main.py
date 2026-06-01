@@ -29,6 +29,9 @@ log = logging.getLogger("scraper")
 # down to recent). Dedupe (post id + phash) collapses overlaps.
 TOP_WINDOWS = ["month", "year", "all"]
 
+# AI-classified scales that are NOT tactical battlemaps — auto-rejected on import.
+NON_BATTLEMAP_SCALES = {"world", "region"}
+
 
 def merge_tags(base: TagResult, extra: TagResult | None) -> TagResult:
     if not extra:
@@ -42,6 +45,7 @@ def merge_tags(base: TagResult, extra: TagResult | None) -> TagResult:
         base.grid_type = extra.grid_type
     base.dimensions = base.dimensions or extra.dimensions
     base.description = extra.description or base.description
+    base.scale = extra.scale or base.scale
     return base
 
 
@@ -106,12 +110,26 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
                     added += 1
                     continue
 
+                title = f"{sub_post.title} ({img.suffix.lstrip('_')})" if multi else sub_post.title
+
+                # Not a tactical battlemap (world/region): store a rejected tombstone,
+                # skip the R2 upload. Won't appear in the gallery or be re-scraped.
+                if post_tags.scale in NON_BATTLEMAP_SCALES:
+                    db.insert_map({
+                        "reddit_post_id": rid, "source_subreddit": sub, "title": title,
+                        "reddit_author": author, "permalink": permalink, "phash": ph,
+                        "scale": post_tags.scale, "score": score,
+                        "created_utc": _utc(sub_post.created_utc), "status": "rejected",
+                    })
+                    known_hashes.append(ph)
+                    log.info("rejected %s (scale=%s) %s", rid, post_tags.scale, title[:50])
+                    continue
+
                 image_key = f"maps/{rid}{img.ext}"
                 thumb_key = f"thumbs/{rid}.webp"
                 image_url = r2.upload(image_key, processed.image_bytes, processed.content_type)
                 thumb_url = r2.upload(thumb_key, processed.thumb_bytes, "image/webp")
 
-                title = f"{sub_post.title} ({img.suffix.lstrip('_')})" if multi else sub_post.title
                 map_id = db.insert_map({
                     "reddit_post_id": rid,
                     "source_subreddit": sub,
@@ -129,6 +147,7 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
                     "grid_type": post_tags.grid_type,
                     "dimensions": post_tags.dimensions,
                     "description": post_tags.description,
+                    "scale": post_tags.scale,
                     "score": score,
                     "created_utc": _utc(sub_post.created_utc),
                     "status": "pending",
@@ -198,6 +217,8 @@ def retag_existing(db: DB, cfg: Config) -> int:
     log.info("Re-tagging %d existing map(s)%s…", len(maps), " with AI" if use_ai else "")
     done = 0
     for m in maps:
+        if m.get("status") in ("rejected", "removed"):
+            continue  # leave tombstones alone (their images are already purged)
         try:
             title = m.get("title") or ""
             author = m.get("reddit_author")
@@ -219,6 +240,10 @@ def retag_existing(db: DB, cfg: Config) -> int:
                         log.warning("AI re-tag failed for %s: %s", m["id"], e)
 
             fields = {"description": tags.description, "dimensions": tags.dimensions, "grid_type": tags.grid_type}
+            if tags.scale:
+                fields["scale"] = tags.scale
+                if tags.scale in NON_BATTLEMAP_SCALES:
+                    fields["status"] = "rejected"  # world/region map -> remove from gallery
             permalink = m.get("permalink") or ""
             fixed = permalink[permalink.index("http", 1):] if permalink.count("http") > 1 else permalink
             if fixed != permalink:

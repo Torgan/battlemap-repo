@@ -22,7 +22,7 @@ from tagging import TagResult
 
 _MAX_EDGE = 768  # downscale longest edge before sending (cheaper/faster, plenty for tagging)
 
-_PROMPT = """You are tagging a TTRPG battlemap image for a personal map library.
+_PROMPT = """You are tagging a TTRPG map image for a personal map library.
 Reddit post title: "{title}"
 
 Return STRICT JSON only (no markdown, no prose):
@@ -30,9 +30,16 @@ Return STRICT JSON only (no markdown, no prose):
   "tags": ["lowercase", "one-or-two-word", "tags"],
   "grid_type": "grid" | "gridless" | "unknown",
   "dimensions": "WxH or null",
+  "scale": "battlemap" | "region" | "world",
   "description": "one or two factual sentences describing the map"
 }}
-Tags should cover terrain, setting, and notable features. Max 8 tags."""
+Tags should cover terrain, setting, and notable features. Max 8 tags.
+For "scale", judge the zoom level:
+  - "battlemap": a tactical encounter map where you'd place character tokens and fight
+    (a building/interior, a room, a clearing, a ship deck, a street — token scale).
+  - "region": an overland/travel-scale map of a region, country, city-from-above,
+    province, or a hex/wilderness map.
+  - "world": a map of an entire world, continent, or planet."""
 
 
 def _encode(img: Image.Image) -> tuple[str, str]:
@@ -57,6 +64,9 @@ def _to_result(data: dict) -> TagResult:
     desc = data.get("description")
     if isinstance(desc, str) and desc.strip():
         result.description = desc.strip()
+    scale = data.get("scale")
+    if scale in ("battlemap", "region", "world"):
+        result.scale = scale
     return result
 
 
