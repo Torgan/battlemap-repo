@@ -1,0 +1,39 @@
+name: migrate-db
+
+# Apply db/migrations/*.sql to Supabase on deploy. Each file runs once (tracked in a
+# schema_migrations table). Requires the SUPABASE_DB_URL secret — the Postgres connection
+# string (Project Settings -> Database -> Connection string, SESSION pooler / port 5432;
+# NOT the transaction pooler on 6543, which can't run all DDL).
+on:
+  push:
+    branches: [main]
+    paths: ["db/migrations/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: migrate-db
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Apply pending migrations
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PGURL:-}" ]; then echo "SUPABASE_DB_URL secret not set — skipping."; exit 0; fi
+          psql "$PGURL" -v ON_ERROR_STOP=1 -c \
+            "create table if not exists schema_migrations (filename text primary key, applied_at timestamptz default now());"
+          for f in $(ls db/migrations/*.sql | sort); do
+            name=$(basename "$f")
+            applied=$(psql "$PGURL" -t -A -c "select 1 from schema_migrations where filename='$name';")
+            if [ "$applied" = "1" ]; then echo "skip  $name (already applied)"; continue; fi
+            echo "apply $name"
+            psql "$PGURL" -v ON_ERROR_STOP=1 -1 -f "$f"
+            psql "$PGURL" -v ON_ERROR_STOP=1 -c "insert into schema_migrations(filename) values ('$name');"
+          done
+          echo "migrations up to date."

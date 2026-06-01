@@ -2,8 +2,10 @@
 -- then seed a 'hot' source for each existing subreddit.
 -- Run this once in the Supabase SQL editor.
 
--- Replace UNIQUE(subreddit) with UNIQUE(subreddit, sort).
+-- Replace UNIQUE(subreddit) with UNIQUE(subreddit, sort). Idempotent: drop both possible
+-- constraint names first so re-running this migration is safe.
 alter table sources drop constraint if exists sources_subreddit_key;
+alter table sources drop constraint if exists sources_subreddit_sort_key;
 alter table sources add constraint sources_subreddit_sort_key unique (subreddit, sort);
 
 -- Add a 'hot' source alongside the existing 'top' ones. 'hot' surfaces currently
