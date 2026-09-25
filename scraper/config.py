@@ -48,6 +48,9 @@ class Config:
     # Tuning
     default_fetch_limit: int
     phash_max_distance: int
+    # Stop starting new sources after this long. Reddit throttles RSS to ~1 feed/min, and
+    # sources rotate by last_run_at, so a capped run just resumes where it left off.
+    run_time_budget_s: int
 
     @classmethod
     def load(cls, require_cloud: bool = True) -> "Config":
@@ -69,13 +72,14 @@ class Config:
             ai_provider=os.getenv("AI_PROVIDER", "").lower().strip(),
             openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1"),
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
-            openai_model=os.getenv("OPENAI_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
+            openai_model=os.getenv("OPENAI_MODEL", "qwen/qwen3.8-27b"),
             gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
             default_fetch_limit=int(os.getenv("DEFAULT_FETCH_LIMIT", "50")),
             phash_max_distance=int(os.getenv("PHASH_MAX_DISTANCE", "4")),
+            run_time_budget_s=int(os.getenv("RUN_TIME_BUDGET_S", "1500")),
         )
 
     @property

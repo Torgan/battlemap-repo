@@ -14,7 +14,10 @@ class DB:
 
     # ---- sources ----
     def enabled_sources(self) -> list[dict[str, Any]]:
-        res = self.client.table("sources").select("*").eq("enabled", True).execute()
+        # Least-recently-run first: if Reddit rate-limits us mid-run, the next run picks up
+        # where this one stopped instead of re-scraping the same source forever.
+        res = (self.client.table("sources").select("*").eq("enabled", True)
+               .order("last_run_at", desc=False, nullsfirst=True).execute())
         return res.data or []
 
     def touch_source(self, source_id: int) -> None:

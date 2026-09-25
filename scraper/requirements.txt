@@ -1,7 +1,7 @@
-requests==2.32.3
-Pillow==11.0.0
-ImageHash==4.3.1
-boto3==1.35.76
-supabase==2.30.0
-python-dotenv==1.0.1
-anthropic==0.40.0
+requests==2.34.2
+Pillow==12.3.0
+ImageHash==4.3.2
+boto3==1.43.102
+supabase==2.31.0
+python-dotenv==1.2.3
+anthropic==1.8.0

@@ -30,6 +30,7 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 MAX_PER_FEED = 100          # RSS feeds cap out around 100 entries
 REQUEST_DELAY = 1.5         # seconds between subreddit feeds
 MAX_RETRIES = 4
+MAX_BACKOFF = 60            # never sleep longer than this on a single 429
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 _LINK_RE = re.compile(r'<a href="([^"]+)">\[link\]</a>')
@@ -65,6 +66,33 @@ def _resolve_image(submitted: str | None, preview: str | None) -> str | None:
         # gallery / crosspost: the preview id maps to the original on i.redd.it
         return preview.replace("https://preview.redd.it/", "https://i.redd.it/")
     return None
+
+
+class RateLimited(RuntimeError):
+    """Reddit kept returning 429/503. Callers should stop hitting Reddit for this run."""
+
+
+def _backoff(resp: requests.Response, attempt: int) -> int:
+    """Seconds to wait after a 429/503: honor Reddit's headers, else linear back-off."""
+    for h in ("Retry-After", "x-ratelimit-reset"):
+        try:
+            return min(MAX_BACKOFF, max(1, int(float(resp.headers[h]))))
+        except (KeyError, ValueError):
+            pass
+    return 5 * (attempt + 1)
+
+
+def _get_with_backoff(session: requests.Session, url: str, params: dict) -> requests.Response:
+    for attempt in range(MAX_RETRIES):
+        resp = session.get(url, params=params, timeout=30)
+        if resp.status_code in (429, 503):
+            wait = _backoff(resp, attempt)
+            log.warning("%d from Reddit; backing off %ds", resp.status_code, wait)
+            time.sleep(wait)
+            continue
+        resp.raise_for_status()
+        return resp
+    raise RateLimited(f"Reddit rate-limited after {MAX_RETRIES} retries: {url}")
 
 
 class _Author:
@@ -122,17 +150,7 @@ class RedditRSS:
         self.session.headers.update({"User-Agent": user_agent})
 
     def get_feed(self, path: str, params: dict) -> bytes:
-        url = f"{BASE}{path}"
-        for attempt in range(MAX_RETRIES):
-            resp = self.session.get(url, params=params, timeout=30)
-            if resp.status_code in (429, 503):
-                wait = 5 * (attempt + 1)
-                log.warning("%d from Reddit; backing off %ds", resp.status_code, wait)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            return resp.content
-        raise RuntimeError(f"Reddit rate-limited after {MAX_RETRIES} retries: {url}")
+        return _get_with_backoff(self.session, f"{BASE}{path}", params).content
 
 
 class RedditOAuth:
@@ -165,16 +183,7 @@ class RedditOAuth:
 
     def get_listing(self, path: str, params: dict) -> dict:
         url = f"{self.OAUTH}{path}"
-        for attempt in range(MAX_RETRIES):
-            resp = self.session.get(url, params={**params, "raw_json": 1}, timeout=30)
-            if resp.status_code in (429, 503):
-                wait = 5 * (attempt + 1)
-                log.warning("%d from Reddit; backing off %ds", resp.status_code, wait)
-                time.sleep(wait)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        raise RuntimeError(f"Reddit rate-limited after {MAX_RETRIES} retries: {url}")
+        return _get_with_backoff(self.session, url, {**params, "raw_json": 1}).json()
 
 
 def make_reddit(cfg: Config):

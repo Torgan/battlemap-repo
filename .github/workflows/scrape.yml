@@ -26,10 +26,24 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    # RUN_TIME_BUDGET_S (25 min) caps new work; this is the hard stop.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: write   # for the keep-alive step below
     defaults:
       run:
         working-directory: scraper
     steps:
+      # GitHub disables scheduled workflows after 60 days without repo commits (this
+      # happened on 2026-07-31). Re-enabling via the API resets that clock — no dummy commits.
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/scrape.yml/enable" || true
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6

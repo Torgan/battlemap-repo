@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 
 import requests
 
@@ -18,7 +19,7 @@ from config import Config
 from db import DB
 from dedupe import is_near_duplicate, phash_hex
 from extract import extract_images
-from reddit_client import iter_submissions, make_reddit
+from reddit_client import RateLimited, iter_submissions, make_reddit
 from storage import R2, download_and_process
 from tagging import TagResult, build_description, heuristic_tags
 
@@ -162,8 +163,6 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
                 log.warning("skip %s: %s", rid, e)
                 continue
 
-    if not dry:
-        db.touch_source(source["id"])
     return added
 
 
@@ -302,19 +301,38 @@ def main() -> int:
     r2 = None if args.dry_run else R2(cfg)
     limit = args.limit or cfg.default_fetch_limit
     total = 0
+    failed = 0
+    deadline = time.monotonic() + cfg.run_time_budget_s
     for source in sources:
+        if time.monotonic() > deadline:
+            log.info("Run time budget (%ds) reached — remaining sources go first next run.",
+                     cfg.run_time_budget_s)
+            break
         # 'top' sources sweep multiple time windows; 'hot'/'new' run once.
         windows = TOP_WINDOWS if source["sort"] == "top" else [source["time_filter"]]
-        for tf in windows:
-            total += process_source(cfg, db, r2, reddit, {**source, "time_filter": tf},
-                                    limit, args.dry_run)
+        try:
+            for tf in windows:
+                total += process_source(cfg, db, r2, reddit, {**source, "time_filter": tf},
+                                        limit, args.dry_run)
+        except RateLimited as e:
+            # Expected from shared CI IPs. Stop politely; sources are ordered by last_run_at,
+            # so the next run resumes with the ones we didn't reach.
+            log.warning("%s — stopping this run early, the rest will be picked up next run.", e)
+            break
+        except Exception as e:  # noqa: BLE001 - one broken feed must not kill the others
+            log.error("r/%s (%s) failed: %s", source["subreddit"], source["sort"], e)
+            failed += 1
+            continue
+        if not args.dry_run and source["id"] != -1:
+            db.touch_source(source["id"])
 
     # Reclaim storage from any maps moderated as rejected/removed since the last run.
     if not args.dry_run:
         cleanup_removed(db, r2)
 
     log.info("Done. %d map(s) %s.", total, "previewed" if args.dry_run else "added")
-    return 0
+    # Fail loudly only if every attempted source broke (not for a routine rate-limit stop).
+    return 1 if failed and failed == len(sources) else 0
 
 
 if __name__ == "__main__":

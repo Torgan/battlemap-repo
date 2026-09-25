@@ -42,7 +42,10 @@ class R2:
             endpoint_url=f"https://{cfg.r2_account_id}.r2.cloudflarestorage.com",
             aws_access_key_id=cfg.r2_access_key_id,
             aws_secret_access_key=cfg.r2_secret_access_key,
-            config=BotoConfig(signature_version="s3v4"),
+            # boto3 >= 1.36 sends extra checksums by default; R2 only needs them when required.
+            config=BotoConfig(signature_version="s3v4",
+                              request_checksum_calculation="when_required",
+                              response_checksum_validation="when_required"),
             region_name="auto",
         )
 
