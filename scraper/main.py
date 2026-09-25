@@ -31,7 +31,8 @@ log = logging.getLogger("scraper")
 TOP_WINDOWS = ["month", "year", "all"]
 
 # AI-classified scales that are NOT tactical battlemaps — auto-rejected on import.
-NON_BATTLEMAP_SCALES = {"world", "region"}
+# "region" is left to moderation: the model over-applies it to town/dock/pack maps.
+NON_BATTLEMAP_SCALES = {"world"}
 
 
 def merge_tags(base: TagResult, extra: TagResult | None) -> TagResult:
@@ -121,7 +122,7 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
 
                 title = f"{sub_post.title} ({img.suffix.lstrip('_')})" if multi else sub_post.title
 
-                # Not a tactical battlemap (world/region): store a rejected tombstone,
+                # Not a tactical battlemap (world scale): store a rejected tombstone,
                 # skip the R2 upload. Won't appear in the gallery or be re-scraped.
                 # ...unless the title gives grid dimensions ("[31x48]"): that's a battlemap
                 # whatever the model thinks, so let it through to moderation instead.
@@ -252,7 +253,7 @@ def retag_existing(db: DB, cfg: Config) -> int:
             if tags.scale:
                 fields["scale"] = tags.scale
                 if tags.scale in NON_BATTLEMAP_SCALES:
-                    fields["status"] = "rejected"  # world/region map -> remove from gallery
+                    fields["status"] = "rejected"  # world map -> remove from gallery
             permalink = m.get("permalink") or ""
             fixed = permalink[permalink.index("http", 1):] if permalink.count("http") > 1 else permalink
             if fixed != permalink:
