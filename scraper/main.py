@@ -50,7 +50,12 @@ def merge_tags(base: TagResult, extra: TagResult | None) -> TagResult:
     return base
 
 
-def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int, dry: bool) -> int:
+class OutOfTime(Exception):
+    """The run's time budget ran out mid-source; the source stays un-touched for next run."""
+
+
+def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int, dry: bool,
+                   deadline: float = float("inf")) -> int:
     sub = source["subreddit"]
     log.info("Scraping r/%s (sort=%s, time=%s, limit=%d)", sub, source["sort"],
              source["time_filter"], limit)
@@ -74,6 +79,7 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
         body = getattr(sub_post, "selftext", "")
         author = getattr(sub_post.author, "name", None) if sub_post.author else None
         tags = heuristic_tags(sub_post.title, body, flair)
+        title_dims = tags.dimensions  # before AI merge (merge_tags mutates `tags`)
         tags.description = build_description(
             sub_post.title, tags.tags, tags.dimensions, tags.grid_type, sub, author
         )
@@ -87,6 +93,8 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
             rid = f"{sub_post.id}{img.suffix}"
             if not dry and db.post_exists(rid):
                 continue
+            if time.monotonic() > deadline:
+                raise OutOfTime(added)
             try:
                 processed = download_and_process(img.url, img.ext, cfg.reddit_user_agent)
 
@@ -115,7 +123,9 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
 
                 # Not a tactical battlemap (world/region): store a rejected tombstone,
                 # skip the R2 upload. Won't appear in the gallery or be re-scraped.
-                if post_tags.scale in NON_BATTLEMAP_SCALES:
+                # ...unless the title gives grid dimensions ("[31x48]"): that's a battlemap
+                # whatever the model thinks, so let it through to moderation instead.
+                if post_tags.scale in NON_BATTLEMAP_SCALES and not title_dims:
                     db.insert_map({
                         "reddit_post_id": rid, "source_subreddit": sub, "title": title,
                         "reddit_author": author, "permalink": permalink, "phash": ph,
@@ -313,7 +323,12 @@ def main() -> int:
         try:
             for tf in windows:
                 total += process_source(cfg, db, r2, reddit, {**source, "time_filter": tf},
-                                        limit, args.dry_run)
+                                        limit, args.dry_run, deadline)
+        except OutOfTime as e:
+            total += e.args[0]
+            log.info("Run time budget (%ds) reached mid-source — r/%s resumes next run.",
+                     cfg.run_time_budget_s, source["subreddit"])
+            break
         except RateLimited as e:
             # Expected from shared CI IPs. Stop politely; sources are ordered by last_run_at,
             # so the next run resumes with the ones we didn't reach.
