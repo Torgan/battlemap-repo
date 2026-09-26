@@ -149,7 +149,10 @@ def _openai_tags(ep: _Endpoint, title: str, img: Image.Image) -> TagResult | Non
         _note_limits(limits, resp)
         if resp.status_code == 429:
             retry_after = _duration(resp.headers.get("retry-after")) or 0.0
-            if retry_after > _MAX_WAIT or resp.headers.get("x-should-retry") == "false":
+            no_quota = (resp.headers.get("x-should-retry") == "false"
+                        # Mistral: a workspace without an active plan has a 0 req/min limit
+                        or resp.headers.get("x-ratelimit-limit-req-minute") == "0")
+            if retry_after > _MAX_WAIT or no_quota:
                 # Daily quota (Groq free tier: 200k tokens/day ~ 85 maps), not the per-minute
                 # window. Stop calling the API for the rest of this run.
                 _quota[ep.base_url] = time.monotonic() + retry_after
