@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import time
 from dataclasses import dataclass
 
@@ -20,6 +21,9 @@ from PIL import Image
 
 from config import Config
 from tagging import TagResult
+
+log = logging.getLogger("scraper.ai")
+_announced: set[str] = set()  # fallback endpoints already logged this run
 
 _MAX_EDGE = 768  # downscale longest edge before sending (cheaper/faster, plenty for tagging)
 
@@ -87,6 +91,10 @@ def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
                 raise
             fallback = _Endpoint(cfg.openai_fallback_base_url, cfg.openai_fallback_api_key,
                                  cfg.openai_fallback_model)
+            if fallback.base_url not in _announced:
+                _announced.add(fallback.base_url)
+                log.info("Primary AI quota exhausted — using fallback %s (%s)",
+                         fallback.base_url, fallback.model)
             return _openai_tags(fallback, title, img)
     if cfg.ai_provider == "gemini" and cfg.gemini_api_key:
         return _gemini_tags(cfg, title, img)
