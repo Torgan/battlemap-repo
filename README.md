@@ -36,7 +36,7 @@ Reddit API ──(PRAW)──> Scraper (Python, GitHub Actions cron)
 - `foundry-module/` — FoundryVTT module (final phase).
 - `.github/workflows/scrape.yml` — scheduled scrape (hourly).
 - `.github/workflows/backfill-ai.yml` — daily AI tagging of maps that only got title tags
-  (the free AI tier allows ~85 maps/day; see `OPENAI_FALLBACK_*` in `.env.example`).
+  (catch-up after AI quota outages; primary + fallback AI providers in `.env.example`).
 
 ## One-time account setup
 

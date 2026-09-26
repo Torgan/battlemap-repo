@@ -41,8 +41,8 @@ class Config:
     openai_base_url: str
     openai_api_key: str | None
     openai_model: str
-    # Optional second OpenAI-compatible provider, used when the primary's daily quota runs
-    # out (Groq free tier ~85 maps/day). Default target: Mistral Free mode (ministral-14b).
+    # Optional second OpenAI-compatible provider, used whenever the primary fails (e.g. its
+    # quota runs out). Defaults: primary Mistral Free mode, fallback Groq free tier.
     openai_fallback_base_url: str
     openai_fallback_api_key: str | None
     openai_fallback_model: str
@@ -75,12 +75,12 @@ class Config:
             r2_bucket=os.getenv("R2_BUCKET", "battlemaps"),
             r2_public_base_url=cloud("R2_PUBLIC_BASE_URL").rstrip("/"),
             ai_provider=os.getenv("AI_PROVIDER", "").lower().strip(),
-            openai_base_url=os.getenv("OPENAI_BASE_URL", "https://api.groq.com/openai/v1"),
+            openai_base_url=os.getenv("OPENAI_BASE_URL") or "https://api.mistral.ai/v1",
             openai_api_key=os.getenv("OPENAI_API_KEY") or None,
-            openai_model=os.getenv("OPENAI_MODEL", "qwen/qwen3.8-27b"),
-            openai_fallback_base_url=os.getenv("OPENAI_FALLBACK_BASE_URL") or "https://api.mistral.ai/v1",
+            openai_model=os.getenv("OPENAI_MODEL") or "ministral-14b-2512",
+            openai_fallback_base_url=os.getenv("OPENAI_FALLBACK_BASE_URL") or "https://api.groq.com/openai/v1",
             openai_fallback_api_key=os.getenv("OPENAI_FALLBACK_API_KEY") or None,
-            openai_fallback_model=os.getenv("OPENAI_FALLBACK_MODEL") or "ministral-14b-2512",
+            openai_fallback_model=os.getenv("OPENAI_FALLBACK_MODEL") or "qwen/qwen3.8-27b",
             gemini_api_key=os.getenv("GEMINI_API_KEY") or None,
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.0-flash"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),

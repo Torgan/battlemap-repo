@@ -84,17 +84,21 @@ def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
         primary = _Endpoint(cfg.openai_base_url, cfg.openai_api_key, cfg.openai_model)
         try:
             return _openai_tags(primary, title, img)
-        except QuotaExhausted:
-            # Optional second OpenAI-compatible provider (e.g. Mistral) once the primary's
-            # daily quota is gone. Unset OPENAI_FALLBACK_API_KEY = no fallback.
+        except Exception as e:  # noqa: BLE001
+            # Optional second OpenAI-compatible provider whenever the primary fails — its
+            # quota is gone (daily for Groq, monthly for Mistral) or it's erroring.
+            # Unset OPENAI_FALLBACK_API_KEY = no fallback.
             if not cfg.openai_fallback_api_key:
                 raise
             fallback = _Endpoint(cfg.openai_fallback_base_url, cfg.openai_fallback_api_key,
                                  cfg.openai_fallback_model)
-            if fallback.base_url not in _announced:
-                _announced.add(fallback.base_url)
-                log.info("Primary AI quota exhausted — using fallback %s (%s)",
-                         fallback.base_url, fallback.model)
+            if isinstance(e, QuotaExhausted):
+                if fallback.base_url not in _announced:
+                    _announced.add(fallback.base_url)
+                    log.info("Primary AI quota exhausted (%s) — using fallback %s (%s)",
+                             e, fallback.base_url, fallback.model)
+            else:
+                log.warning("Primary AI failed (%s) — trying fallback %s", e, fallback.base_url)
             return _openai_tags(fallback, title, img)
     if cfg.ai_provider == "gemini" and cfg.gemini_api_key:
         return _gemini_tags(cfg, title, img)
