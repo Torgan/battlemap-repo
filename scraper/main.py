@@ -5,6 +5,7 @@ Usage:
     python main.py --subreddit battlemaps   # one subreddit
     python main.py --limit 5                # cap posts per source (great for testing)
     python main.py --dry-run                # fetch + tag, but don't upload or write DB
+    python main.py --retag --missing-ai     # AI-tag maps that only have title tags
 """
 from __future__ import annotations
 
@@ -53,6 +54,14 @@ def merge_tags(base: TagResult, extra: TagResult | None) -> TagResult:
 
 class OutOfTime(Exception):
     """The run's time budget ran out mid-source; the source stays un-touched for next run."""
+
+
+_ai_quota_logged = False
+
+
+def _mark_quota_logged() -> None:
+    global _ai_quota_logged
+    _ai_quota_logged = True
 
 
 def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int, dry: bool,
@@ -110,7 +119,13 @@ def process_source(cfg: Config, db: DB, r2: R2, reddit, source: dict, limit: int
                         from ai_tagging import ai_tags
                         post_tags = merge_tags(tags, ai_tags(cfg, sub_post.title, processed.pil_image))
                     except Exception as e:  # noqa: BLE001
-                        log.warning("AI tagging failed for %s: %s", rid, e)
+                        from ai_tagging import QuotaExhausted
+                        if not isinstance(e, QuotaExhausted) or not _ai_quota_logged:
+                            log.warning("AI tagging failed for %s: %s", rid, e)
+                        if isinstance(e, QuotaExhausted) and not _ai_quota_logged:
+                            log.warning("AI quota exhausted — remaining maps get title tags only; "
+                                        "backfill later with: main.py --retag --missing-ai")
+                            _mark_quota_logged()
 
                 if dry:
                     log.info("[dry] %s | %dx%d | grid=%s dims=%s | tags=%s",
@@ -216,13 +231,15 @@ def _fetch_image(url: str, user_agent: str):
     return img
 
 
-def retag_existing(db: DB, cfg: Config) -> int:
+def retag_existing(db: DB, cfg: Config, only_missing_ai: bool = False) -> int:
     """Recompute tags + descriptions for maps already in the DB.
 
     Heuristics from title always; if an AI provider is configured, also runs vision tagging
     on each map's (already-hosted) image and merges it. Repairs malformed permalinks too.
     """
     maps = db.all_maps()
+    if only_missing_ai:
+        maps = [m for m in maps if not m.get("scale")]  # scale is only ever set by the AI
     use_ai = cfg.ai_tagging
     log.info("Re-tagging %d existing map(s)%s…", len(maps), " with AI" if use_ai else "")
     done = 0
@@ -247,6 +264,10 @@ def retag_existing(db: DB, cfg: Config) -> int:
                         from ai_tagging import ai_tags
                         tags = merge_tags(tags, ai_tags(cfg, title, _fetch_image(img_url, cfg.reddit_user_agent)))
                     except Exception as e:  # noqa: BLE001
+                        from ai_tagging import QuotaExhausted
+                        if isinstance(e, QuotaExhausted):
+                            log.warning("AI quota exhausted — stopping re-tag (%s)", e)
+                            break
                         log.warning("AI re-tag failed for %s: %s", m["id"], e)
 
             fields = {"description": tags.description, "dimensions": tags.dimensions, "grid_type": tags.grid_type}
@@ -277,13 +298,15 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Fetch + tag but don't upload/write.")
     parser.add_argument("--retag", action="store_true",
                         help="Recompute tags/descriptions for maps already in the DB, then exit.")
+    parser.add_argument("--missing-ai", action="store_true",
+                        help="With --retag: only maps that never got AI tags.")
     parser.add_argument("--cleanup", action="store_true",
                         help="Only delete R2 objects for rejected/removed maps, then exit.")
     args = parser.parse_args()
 
     if args.retag:
         cfg = Config.load()
-        return 0 if retag_existing(DB(cfg), cfg) >= 0 else 1
+        return 0 if retag_existing(DB(cfg), cfg, args.missing_ai) >= 0 else 1
 
     if args.cleanup:
         cfg = Config.load()

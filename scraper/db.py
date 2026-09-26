@@ -38,12 +38,18 @@ class DB:
         res = self.client.table("maps").insert(row).execute()
         return res.data[0]["id"]
 
-    def all_maps(self) -> list[dict[str, Any]]:
-        res = (self.client.table("maps")
-               .select("id,title,source_subreddit,reddit_author,dimensions,grid_type,"
-                       "permalink,thumb_url,image_url,status")
-               .execute())
-        return res.data or []
+    def all_maps(self, page: int = 1000) -> list[dict[str, Any]]:
+        # PostgREST caps a response at 1000 rows, so page through the table.
+        rows: list[dict[str, Any]] = []
+        while True:
+            res = (self.client.table("maps")
+                   .select("id,title,source_subreddit,reddit_author,dimensions,grid_type,"
+                           "permalink,thumb_url,image_url,status,scale")
+                   .order("id").range(len(rows), len(rows) + page - 1)
+                   .execute())
+            rows += res.data or []
+            if len(res.data or []) < page:
+                return rows
 
     def update_map(self, map_id: str, fields: dict[str, Any]) -> None:
         self.client.table("maps").update(fields).eq("id", map_id).execute()
