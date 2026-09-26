@@ -120,9 +120,12 @@ _quota: dict[str, float] = {}  # base_url -> monotonic time the daily quota free
 
 def _error_message(resp: requests.Response) -> str:
     try:
-        return resp.json()["error"]["message"]
-    except (ValueError, KeyError, TypeError):
-        return f"HTTP {resp.status_code}"
+        body = resp.json()
+        # Groq/OpenAI: {"error": {"message": ...}}; Mistral: {"message": ...}
+        msg = (body.get("error") or {}).get("message") or body.get("message")
+    except (ValueError, AttributeError):
+        msg = None
+    return f"{resp.request.url.split('/')[2] if resp.request else ''} {msg or f'HTTP {resp.status_code}'}".strip()
 
 
 def _openai_tags(ep: _Endpoint, title: str, img: Image.Image) -> TagResult | None:
