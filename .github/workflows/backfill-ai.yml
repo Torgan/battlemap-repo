@@ -1,0 +1,66 @@
+name: backfill-ai-tags
+
+# AI-tag maps that only got title tags (the AI provider's daily quota ran out when they
+# were scraped). Groq's free tier allows ~85 maps/day, so this uses whatever quota is left
+# once a day; with OPENAI_FALLBACK_API_KEY set, it continues on the fallback provider.
+on:
+  schedule:
+    # 03:53 UTC: quiet hour, and clear of the hourly scrape at :23 (which ends by ~:50).
+    - cron: "53 3 * * *"
+  workflow_dispatch:
+
+# Same group as the scraper: both rewrite map tags, never run them at once.
+concurrency:
+  group: scrape-battlemaps
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write   # for the keep-alive step below
+    defaults:
+      run:
+        working-directory: scraper
+    steps:
+      # GitHub disables scheduled workflows after 60 days without commits; re-enabling via
+      # the API resets that clock.
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/backfill-ai.yml/enable" || true
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: scraper/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Backfill AI tags
+        env:
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+          AI_PROVIDER: ${{ secrets.AI_PROVIDER }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          OPENAI_FALLBACK_BASE_URL: ${{ secrets.OPENAI_FALLBACK_BASE_URL }}
+          OPENAI_FALLBACK_API_KEY: ${{ secrets.OPENAI_FALLBACK_API_KEY }}
+          OPENAI_FALLBACK_MODEL: ${{ secrets.OPENAI_FALLBACK_MODEL }}
+          # Stop starting new maps after 20 min, so the next hourly scrape isn't held up.
+          RUN_TIME_BUDGET_S: "1200"
+        run: python main.py --retag --missing-ai

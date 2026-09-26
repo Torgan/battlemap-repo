@@ -13,6 +13,7 @@ import base64
 import io
 import json
 import time
+from dataclasses import dataclass
 
 import requests
 from PIL import Image
@@ -76,7 +77,17 @@ def _strip_fence(text: str) -> str:
 
 def ai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
     if cfg.ai_provider == "openai" and cfg.openai_api_key:
-        return _openai_tags(cfg, title, img)
+        primary = _Endpoint(cfg.openai_base_url, cfg.openai_api_key, cfg.openai_model)
+        try:
+            return _openai_tags(primary, title, img)
+        except QuotaExhausted:
+            # Optional second OpenAI-compatible provider (e.g. Mistral) once the primary's
+            # daily quota is gone. Unset OPENAI_FALLBACK_API_KEY = no fallback.
+            if not cfg.openai_fallback_api_key:
+                raise
+            fallback = _Endpoint(cfg.openai_fallback_base_url, cfg.openai_fallback_api_key,
+                                 cfg.openai_fallback_model)
+            return _openai_tags(fallback, title, img)
     if cfg.ai_provider == "gemini" and cfg.gemini_api_key:
         return _gemini_tags(cfg, title, img)
     if cfg.ai_provider == "anthropic" and cfg.anthropic_api_key:
@@ -88,7 +99,15 @@ class QuotaExhausted(RuntimeError):
     """The provider's daily quota is used up; further calls this run would just be refused."""
 
 
-_quota = {"exhausted_until": 0.0}
+@dataclass(frozen=True)
+class _Endpoint:
+    base_url: str
+    api_key: str
+    model: str
+
+
+# Per-endpoint (keyed by base URL) state, so Groq's quota never blocks the fallback.
+_quota: dict[str, float] = {}  # base_url -> monotonic time the daily quota frees up
 
 
 def _error_message(resp: requests.Response) -> str:
@@ -98,15 +117,16 @@ def _error_message(resp: requests.Response) -> str:
         return f"HTTP {resp.status_code}"
 
 
-def _openai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
+def _openai_tags(ep: _Endpoint, title: str, img: Image.Image) -> TagResult | None:
     """OpenAI-compatible chat completions with an image. Works with Groq, OpenRouter,
     Mistral, Together, etc. via OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL."""
-    if time.monotonic() < _quota["exhausted_until"]:
-        raise QuotaExhausted("daily AI quota used up earlier this run")
+    if time.monotonic() < _quota.get(ep.base_url, 0.0):
+        raise QuotaExhausted(f"daily AI quota for {ep.base_url} used up earlier this run")
+    limits = _limits.setdefault(ep.base_url, {"remaining": None, "reset_at": 0.0})
     b64, mime = _encode(img)
-    url = cfg.openai_base_url.rstrip("/") + "/chat/completions"
+    url = ep.base_url.rstrip("/") + "/chat/completions"
     body = {
-        "model": cfg.openai_model,
+        "model": ep.model,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": _PROMPT.format(title=title)},
             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
@@ -114,27 +134,27 @@ def _openai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
         "max_tokens": 400,
         "temperature": 0.2,
     }
-    headers = {"Authorization": f"Bearer {cfg.openai_api_key}"}
+    headers = {"Authorization": f"Bearer {ep.api_key}"}
     for attempt in range(4):
-        _pace()
+        _pace(limits)
         resp = requests.post(url, json=body, headers=headers, timeout=60)
-        _note_limits(resp)
+        _note_limits(limits, resp)
         if resp.status_code == 429:
             retry_after = _duration(resp.headers.get("retry-after")) or 0.0
             if retry_after > _MAX_WAIT or resp.headers.get("x-should-retry") == "false":
                 # Daily quota (Groq free tier: 200k tokens/day ~ 85 maps), not the per-minute
                 # window. Stop calling the API for the rest of this run.
-                _quota["exhausted_until"] = time.monotonic() + retry_after
+                _quota[ep.base_url] = time.monotonic() + retry_after
                 raise QuotaExhausted(_error_message(resp))
             wait = max(retry_after, _duration(resp.headers.get("x-ratelimit-reset-tokens")) or 0.0)
             time.sleep(min((wait or 5 * (attempt + 1)) + 1, _MAX_WAIT))
-            _limits["remaining"] = None  # just waited for the reset; don't pace again
+            limits["remaining"] = None  # just waited for the reset; don't pace again
             continue
         resp.raise_for_status()
         text = resp.json()["choices"][0]["message"]["content"]
         return _to_result(json.loads(_strip_fence(text)))
     # Surface it: this used to fail silently and left most maps with title-only tags.
-    raise RuntimeError(f"still rate-limited by {cfg.openai_base_url} after 4 attempts")
+    raise RuntimeError(f"still rate-limited by {ep.base_url} after 4 attempts")
 
 
 # ---- client-side pacing for per-minute token limits (Groq free tier: 8k tokens/min) ----
@@ -142,7 +162,7 @@ def _openai_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:
 # long Retry-After penalties), wait for the window to reset when the next call won't fit.
 _CALL_TOKENS = 2500
 _MAX_WAIT = 65  # the token window is one minute
-_limits = {"remaining": None, "reset_at": 0.0}
+_limits: dict[str, dict] = {}  # base_url -> {"remaining": tokens, "reset_at": monotonic}
 
 
 def _duration(value: str | None) -> float | None:
@@ -166,22 +186,22 @@ def _duration(value: str | None) -> float | None:
         return None
 
 
-def _note_limits(resp: requests.Response) -> None:
+def _note_limits(limits: dict, resp: requests.Response) -> None:
     try:
-        _limits["remaining"] = int(resp.headers["x-ratelimit-remaining-tokens"])
+        limits["remaining"] = int(resp.headers["x-ratelimit-remaining-tokens"])
     except (KeyError, ValueError):
         return
     reset = _duration(resp.headers.get("x-ratelimit-reset-tokens")) or 0.0
-    _limits["reset_at"] = time.monotonic() + reset
+    limits["reset_at"] = time.monotonic() + reset
 
 
-def _pace() -> None:
-    remaining = _limits["remaining"]
+def _pace(limits: dict) -> None:
+    remaining = limits["remaining"]
     if remaining is not None and remaining < _CALL_TOKENS:
-        wait = _limits["reset_at"] - time.monotonic()
+        wait = limits["reset_at"] - time.monotonic()
         if wait > 0:
             time.sleep(min(wait + 0.5, _MAX_WAIT))
-        _limits["remaining"] = None  # unknown until the next response
+        limits["remaining"] = None  # unknown until the next response
 
 
 def _gemini_tags(cfg: Config, title: str, img: Image.Image) -> TagResult | None:

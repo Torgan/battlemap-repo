@@ -239,11 +239,17 @@ def retag_existing(db: DB, cfg: Config, only_missing_ai: bool = False) -> int:
     """
     maps = db.all_maps()
     if only_missing_ai:
-        maps = [m for m in maps if not m.get("scale")]  # scale is only ever set by the AI
+        # scale is only ever set by the AI; tombstones are skipped below anyway
+        maps = [m for m in maps if not m.get("scale")
+                and m.get("status") not in ("rejected", "removed")]
     use_ai = cfg.ai_tagging
     log.info("Re-tagging %d existing map(s)%s…", len(maps), " with AI" if use_ai else "")
     done = 0
+    deadline = time.monotonic() + cfg.run_time_budget_s
     for m in maps:
+        if time.monotonic() > deadline:
+            log.info("Run time budget (%ds) reached — stopping re-tag.", cfg.run_time_budget_s)
+            break
         if m.get("status") in ("rejected", "removed"):
             continue  # leave tombstones alone (their images are already purged)
         try:
