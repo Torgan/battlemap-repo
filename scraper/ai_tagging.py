@@ -55,7 +55,9 @@ def _encode(img: Image.Image) -> tuple[str, str]:
     return base64.standard_b64encode(buf.getvalue()).decode(), "image/jpeg"
 
 
-def _to_result(data: dict) -> TagResult:
+def _to_result(data: dict | list) -> TagResult:
+    if isinstance(data, list):  # some models wrap the object in a list: [{...}]
+        data = next((d for d in data if isinstance(d, dict)), {})
     result = TagResult()
     for name in data.get("tags", [])[:8]:
         if isinstance(name, str) and name.strip():
